@@ -3,54 +3,94 @@ var assert = require('assert'),
   exists = fs.existsSync,
   join = require('path').join,
   read = fs.readFileSync,
+  statSync = fs.statSync,
   sass = process.env.NODESASS_COV
     ? require('../lib-cov')
     : require('../lib'),
   readYaml = require('read-yaml'),
   mergeWith = require('lodash/mergeWith'),
   glob = require('glob'),
-  specPath = require('sass-spec').dirname.replace(/\\/g, '/'),
-  impl = 'libsass',
-  version = 3.5;
+  specPath = join(__dirname, 'fixtures/sass-spec/spec'),
+  impl = function(entry) { return entry.match(/(sass\/)?libsass.*/g) !== null },
+  version = 3.6;
 
 var normalize = function(str) {
   // This should be /\r\n/g, '\n', but there seems to be some empty line issues
   return str.replace(/\s+/g, '');
 };
 
-var inputs = glob.sync(specPath + '/**/input.*');
+var inputs = glob.sync(specPath + '/**/input.scss');
+
+const getImplSpecificFileFactory = function(folder) {
+  return function (fileName) {
+    let implSpecificName;
+    if(fileName.includes('.')) {
+      const tokens = fileName.split('.');
+      tokens.splice(1,0,'-libsass.');
+      implSpecificName = tokens.join('');
+    } else {
+      implSpecificName = fileName.concat('-libsass');
+    }
+
+    const implSpecificPath = join(folder, implSpecificName);
+
+    if(exists(implSpecificPath)) {
+      return implSpecificPath;
+    }
+
+    return join(folder, fileName);
+  }
+}
 
 var initialize = function(inputCss, options) {
   var testCase = {};
   var folders = inputCss.split('/');
   var folder = join(inputCss, '..');
+  const getImplSpecificFile = getImplSpecificFileFactory(folder);
   testCase.folder = folder;
   testCase.name = folders[folders.length - 2];
   testCase.inputPath = inputCss;
-  testCase.expectedPath = join(folder, 'expected_output.css');
-  testCase.errorPath = join(folder, 'error');
-  testCase.statusPath = join(folder, 'status');
+  testCase.expectedPath = getImplSpecificFile('output.css');
+  testCase.errorPath = null;
+  testCase.warningPath = getImplSpecificFile('warning');
   testCase.optionsPath = join(folder, 'options.yml');
   if (exists(testCase.optionsPath)) {
-    options = mergeWith(Object.assign({}, options), readYaml.sync(testCase.optionsPath), customizer);
+    let yamlOptions;
+    try {
+      yamlOptions = readYaml.sync(testCase.optionsPath);
+    } catch(error) {
+      // This block needed to compensate for a duplicate key in spec/parser/operations/logic_eq/dimensions/pairs.hrx
+      const yamlContents = read(testCase.optionsPath, 'utf8');
+      if(yamlContents.match(/:todo:\n(- [\w-]+\n)*?- libsass/)) {
+        yamlOptions = { ':todo': ['libsass'] }
+      } else {
+        throw error;
+      }
+    }
+    options = mergeWith(Object.assign({}, options), yamlOptions, customizer);
   }
   testCase.includePaths = [
     folder,
-    join(folder, 'sub')
+    join(folder, 'sub'),
+    specPath
   ];
-  testCase.precision = parseFloat(options[':precision']) || 5;
+  testCase.precision = parseFloat(options[':precision']) || 10;
   testCase.outputStyle = options[':output_style'] ? options[':output_style'].replace(':', '') : 'nested';
-  testCase.todo = options[':todo'] !== undefined && options[':todo'] !== null && options[':todo'].indexOf(impl) !== -1;
+  testCase.todo = options[':todo'] !== undefined && options[':todo'] !== null && options[':todo'].some(impl);
   testCase.only = options[':only_on'] !== undefined && options[':only_on'] !== null && options[':only_on'];
-  testCase.warningTodo = options[':warning_todo'] !== undefined && options[':warning_todo'] !== null && options[':warning_todo'].indexOf(impl) !== -1;
+  testCase.ignoreFor = options[':ignore_for'] !== undefined && options[':ignore_for'] !== null && options[':ignore_for'];
+  testCase.warningTodo = options[':warning_todo'] !== undefined && options[':warning_todo'] !== null && options[':warning_todo'].some(impl);
   testCase.startVersion = parseFloat(options[':start_version']) || 0;
   testCase.endVersion = parseFloat(options[':end_version']) || 99;
   testCase.options = options;
   testCase.result = false;
 
   // Probe filesystem once and cache the results
-  testCase.shouldFail = exists(testCase.statusPath) && !fs.statSync(testCase.statusPath).isDirectory();
-  testCase.verifyStderr = exists(testCase.errorPath) && !fs.statSync(testCase.errorPath).isDirectory();
+  testCase.shouldFail = !exists(testCase.expectedPath);
+  if(testCase.shouldFail) {
+    testCase.errorPath = getImplSpecificFile('error');
+  }
+  testCase.verifyWarning = exists(testCase.warningPath) && !statSync(testCase.warningPath).isDirectory();
   return testCase;
 };
 
@@ -60,14 +100,15 @@ var runTest = function(inputCssPath, options) {
   it(test.name, function(done) {
     if (test.todo || test.warningTodo) {
       this.skip('Test marked with TODO');
-    } else if (test.only && test.only.indexOf(impl) === -1) {
+    } else if (test.only && (test.only.some(impl))) {
       this.skip('Tests marked for only: ' + test.only.join(', '));
+    } else if (test.ignoreFor && (test.ignoreFor.some(impl))) {
+      this.skip('Tests ignored for: ' + test.ignoreFor.join(', '));
     } else if (version < test.startVersion) {
       this.skip('Tests marked for newer Sass versions only');
     } else if (version > test.endVersion) {
       this.skip('Tests marked for older Sass versions only');
     } else {
-      var expected = normalize(read(test.expectedPath, 'utf8'));
       sass.render({
         file: test.inputPath,
         includePaths: test.includePaths,
@@ -75,24 +116,14 @@ var runTest = function(inputCssPath, options) {
         outputStyle: test.outputStyle
       }, function(error, result) {
         if (test.shouldFail) {
-          // Replace 1, with parseInt(read(test.statusPath, 'utf8')) pending
-          // https://github.com/sass/libsass/issues/2162
-          assert.equal(error.status, 1);
-        } else if (test.verifyStderr) {
-          var expectedError = read(test.errorPath, 'utf8');
-          if (error === null) {
-            // Probably a warning
-            assert.ok(expectedError, 'Expected some sort of warning, but found none');
-          } else {
-            // The error messages seem to have some differences in areas
-            // like line numbering, so we'll check the first line for the
-            // general errror message only
-            assert.equal(
-              error.formatted.toString().split('\n')[0],
-              expectedError.toString().split('\n')[0],
-              'Should Error.\nOptions' + JSON.stringify(test.options));
-          }
-        } else if (expected) {
+          const expectedError = read(test.errorPath, 'utf8').replace(/DEPRECATION WARNING:[\s\w\(\).\-"]+\n\n/,'');
+          assert.equal(
+            error.formatted.toString().split('\n')[0],
+            expectedError.toString().split('\n')[0],
+            'Should Error.\nOptions' + JSON.stringify(test.options)
+          );
+        } else if (exists(test.expectedPath)) {
+          const expected = normalize(read(test.expectedPath, 'utf8'));
           assert.equal(
             normalize(result.css.toString()),
             expected,
@@ -106,7 +137,7 @@ var runTest = function(inputCssPath, options) {
 };
 
 var specSuite = {
-  name: specPath.split('/').slice(-1)[0],
+  name: 'spec',
   folder: specPath,
   tests: [],
   suites: [],
@@ -123,7 +154,19 @@ var executeSuite = function(suite, tests) {
   var suiteFolderLength = suite.folder.split('/').length;
   var optionsFile = join(suite.folder, 'options.yml');
   if (exists(optionsFile)) {
-    suite.options = mergeWith(Object.assign({}, suite.options), readYaml.sync(optionsFile), customizer);
+    let yamlOptions;
+    try {
+      yamlOptions = readYaml.sync(optionsFile);
+    } catch(error) {
+      // This block needed to compensate for a duplicate key in spec/parser/operations/logic_eq/dimensions/pairs.hrx
+      const yamlContents = read(testCase.optionsPath, 'utf8');
+      if(yamlContents.match(/:todo:\n(- [\w-]+\n)*?- libsass/)) {
+        yamlOptions = { ':todo': ['libsass'] }
+      } else {
+        throw error;
+      }
+    }
+    suite.options = mergeWith(Object.assign({}, suite.options), yamlOptions, customizer);
   }
 
   // Push tests in the current suite
