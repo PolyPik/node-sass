@@ -11,7 +11,7 @@ var assert = require('assert'),
   mergeWith = require('lodash/mergeWith'),
   glob = require('glob'),
   specPath = join(__dirname, 'fixtures/sass-spec/spec'),
-  impl = function(entry) { return entry.match(/(sass\/)?libsass.*/g) !== null },
+  impl = function(entry) { return entry.match(/(sass\/)?libsass.*/g) !== null; },
   version = 3.6;
 
 var normalize = function(str) {
@@ -39,8 +39,8 @@ const getImplSpecificFileFactory = function(folder) {
     }
 
     return join(folder, fileName);
-  }
-}
+  };
+};
 
 var initialize = function(inputCss, options) {
   var testCase = {};
@@ -62,7 +62,7 @@ var initialize = function(inputCss, options) {
       // This block needed to compensate for a duplicate key in spec/parser/operations/logic_eq/dimensions/pairs.hrx
       const yamlContents = read(testCase.optionsPath, 'utf8');
       if(yamlContents.match(/:todo:\n(- [\w-]+\n)*?- libsass/)) {
-        yamlOptions = { ':todo': ['libsass'] }
+        yamlOptions = { ':todo': ['libsass'] };
       } else {
         throw error;
       }
@@ -116,7 +116,7 @@ var runTest = function(inputCssPath, options) {
         outputStyle: test.outputStyle
       }, function(error, result) {
         if (test.shouldFail) {
-          const expectedError = read(test.errorPath, 'utf8').replace(/DEPRECATION WARNING:[\s\w\(\).\-"]+\n\n/,'');
+          const expectedError = read(test.errorPath, 'utf8').replace(/DEPRECATION WARNING:[\s\w().\-"]+\n\n/,'');
           assert.equal(
             error.formatted.toString().split('\n')[0],
             expectedError.toString().split('\n')[0],
@@ -159,9 +159,9 @@ var executeSuite = function(suite, tests) {
       yamlOptions = readYaml.sync(optionsFile);
     } catch(error) {
       // This block needed to compensate for a duplicate key in spec/parser/operations/logic_eq/dimensions/pairs.hrx
-      const yamlContents = read(testCase.optionsPath, 'utf8');
+      const yamlContents = read(optionsFile, 'utf8');
       if(yamlContents.match(/:todo:\n(- [\w-]+\n)*?- libsass/)) {
-        yamlOptions = { ':todo': ['libsass'] }
+        yamlOptions = { ':todo': ['libsass'] };
       } else {
         throw error;
       }
