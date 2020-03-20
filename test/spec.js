@@ -98,7 +98,7 @@ var runTest = function(inputCssPath, options) {
   var test = initialize(inputCssPath, options);
 
   it(test.name, function(done) {
-    if (test.todo || test.warningTodo) {
+    if (test.todo) {
       this.skip('Test marked with TODO');
     } else if (test.only && (test.only.some(impl))) {
       this.skip('Tests marked for only: ' + test.only.join(', '));
