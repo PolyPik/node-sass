@@ -1,68 +1,64 @@
 const {
-  createReadStream,
   existsSync: exists,
   mkdirSync,
-  copy,
-  outputFile
-} = require('fs-extra');
+} = require('fs');
 const {
   join,
-  basename,
-  dirname
+  normalize
 } = require('path');
-const { promisify } = require('util');
-const glob = promisify(require('glob'));
+const { Readable } = require('stream');
+const eol = require('eol');
 const { archiveFromStream } = require('node-hrx');
-const srcSpecPath = require('sass-spec').dirname.replace(/\\/g, '/');
-const destSpecPath = 'test/fixtures/sass-spec';
+const through2 = require('through2');
+const vfs = require('vinyl-fs');
+const Vinyl = require('vinyl');
+
+const srcSpecPath = normalize(require('sass-spec').dirname);
+const destSpecPath = normalize('test/fixtures/sass-spec');
 
 if(!exists(destSpecPath)) {
   mkdirSync(destSpecPath);
 }
 
-copy(srcSpecPath, destSpecPath)
-  .then(async () => {
-    const hrxFiles = await glob(srcSpecPath+'/**/*.hrx');
-    const archives = await Promise.all(
-      hrxFiles.map(async file => {
-        const archive = await archiveFromStream(createReadStream(file, 'utf8'));
+const extractHrxDir = function(dir) {
+  let files = [];
+  for (const entryName of dir) {
+    const entry = dir.contents[entryName];
+    if(entry.isDirectory()) {
+      files = files.concat(extractHrxDir(entry));
+    } else {
+      files.push(entry);
+    }
+  }
 
-        return {
-          archive,
-          archivePath: file
-        };
-      })
-    );
-    const extractHrxDir = function(dir) {
-      let files = [];
-      for (const entryName of dir) {
-        const entry = dir.contents[entryName];
-        if(entry.isDirectory()) {
-          files = files.concat(extractHrxDir(entry));
-        } else {
-          files.push(entry);
-        }
-      }
+  return files;
+};
 
-      return files;
-    };
+vfs.src(
+  join(srcSpecPath, '**/*').replace(/\\/g, '/').replace(/^\w:/, '')
+).pipe(
+  through2.obj(async function(file, enc, callback) {
+    if(file.extname === '.hrx') {
+      const stream = Readable.from(eol.lf(file.contents.toString()));
+      const archive = await archiveFromStream(stream);
+      const archivedFiles = extractHrxDir(archive);
 
-    const extrFiles = archives.reduce(
-      (prevExtr, {archive, archivePath}) => {
-        const fileObjs = extractHrxDir(archive).map(innerFile => {
-          const path = join(
-            dirname(archivePath),
-            basename(archivePath, '.hrx'),
-            innerFile.path
-          ).replace(srcSpecPath, destSpecPath);
+      for (const fileObj of archivedFiles) {
+        const path = join(file.path.slice(0,-4), fileObj.path);
 
-          return { path, body: innerFile.body };
+        const extFile = new Vinyl({
+          cwd: file.cwd,
+          base: file.base,
+          path,
+          contents: Buffer.from(fileObj.body)
         });
 
-        return prevExtr.concat(fileObjs);
-      },
-      []
-    );
+        this.push(extFile);
+      }
 
-    return Promise.all(extrFiles.map(({path, body}) => outputFile(path, body)));
-  });
+      callback();
+    } else {
+      callback(null, file);
+    }
+  })
+).pipe(vfs.dest(destSpecPath));

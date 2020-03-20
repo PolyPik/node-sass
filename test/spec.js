@@ -10,7 +10,7 @@ var assert = require('assert'),
   readYaml = require('read-yaml'),
   mergeWith = require('lodash/mergeWith'),
   glob = require('glob'),
-  specPath = join(__dirname, 'fixtures/sass-spec/spec'),
+  specPath = 'test/fixtures/sass-spec/spec',
   impl = function(entry) { return entry.match(/(sass\/)?libsass.*/g) !== null; },
   version = 3.6;
 
@@ -118,8 +118,8 @@ var runTest = function(inputCssPath, options) {
         if (test.shouldFail) {
           const expectedError = read(test.errorPath, 'utf8').replace(/DEPRECATION WARNING:[\s\w().\-"]+\n\n/,'');
           assert.equal(
-            error.formatted.toString().split('\n')[0],
-            expectedError.toString().split('\n')[0],
+            (error.formatted.toString().split('\n')[0]).replace(/\r$/g, ''),
+            (expectedError.toString().split('\n')[0]).replace(/\r$/g, ''),
             'Should Error.\nOptions' + JSON.stringify(test.options)
           );
         } else if (exists(test.expectedPath)) {
